@@ -374,6 +374,7 @@ function initEventListeners() {
 
   // Modals
   document.getElementById('btnNewList')?.addEventListener('click', () => openModal('listModal'));
+  document.getElementById('btnCancelListModal')?.addEventListener('click', () => closeModal('listModal'));
   document.getElementById('btnOpenMenu')?.addEventListener('click', () => openModal('menuModal'));
   document.getElementById('btnCreateListFromMenu')?.addEventListener('click', () => {
     closeModal('menuModal');

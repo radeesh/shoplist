@@ -19,6 +19,7 @@ untouched; existing data works as is.
 | 7 | Export fixes | server.js | Restoring a backup no longer revives deleted lists |
 | 8 | US unit dropdown, decimal qty | index.html, app.js | Pick lb / gal / dozen…; 1.5 lb works |
 | 9 | Undo for Clear Done | index.html, app.js, styles.css | 6-second Undo bar instead of a confirm box |
+| 10 | Create List "Cancel" button | app.js | Cancel closes the dialog (it did nothing) |
 
 ---
 
@@ -152,6 +153,18 @@ and also covers "I tapped OK too fast".
   clearing again within 6 seconds, drops the earlier undo.
 - New: `#undoToast` in `index.html`, `.undo-toast` in `styles.css` (uses the
   existing colour variables, so it follows dark/light mode).
+
+## 10. Create List "Cancel" button
+
+**Why:** In the Create List dialog, **Cancel** had no click handler, so it did
+nothing; only ✕ or tapping outside closed it. (The ✕ buttons work through the
+shared `.modal-close` handler; Cancel uses `btn-outline` instead, so it was
+missed.) Already present before this branch.
+
+**What:** One listener in `initEventListeners()`:
+`btnCancelListModal` → `closeModal('listModal')`, matching how the Edit dialog's
+Cancel is wired. Checked every `btn*` id in `index.html`: this was the only
+button with no handler.
 
 ---
 

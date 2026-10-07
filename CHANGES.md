@@ -20,6 +20,8 @@ untouched; existing data works as is.
 | 8 | US unit dropdown, decimal qty | index.html, app.js | Pick lb / gal / dozen…; 1.5 lb works |
 | 9 | Undo for Clear Done | index.html, app.js, styles.css | 6-second Undo bar instead of a confirm box |
 | 10 | Create List "Cancel" button | app.js | Cancel closes the dialog (it did nothing) |
+| 11 | Share-friendly export text | index.html, app.js | To buy / Done / All, qty, prices; Copy works on phones |
+| 12 | Share icons, remembered options | index.html, app.js, styles.css | One tap to WhatsApp / Messages / Email; options stick per phone |
 
 ---
 
@@ -165,6 +167,69 @@ missed.) Already present before this branch.
 `btnCancelListModal` → `closeModal('listModal')`, matching how the Edit dialog's
 Cancel is wired. Checked every `btn*` id in `index.html`: this was the only
 button with no handler.
+
+## 11. Share-friendly export text (`43bf8b9`)
+
+**Why:** The usual reason to export the current list is to paste it into
+WhatsApp or Discord ("can you pick these up?"). The old text was a fixed
+`SHOPLIST / ------` block of every item, checked or not. Also, **Copy Text did
+not work on the phones at all**: `navigator.clipboard` only exists on HTTPS or
+localhost, so on `http://<LAN-IP>` or a Tailscale IP the button threw an error
+and copied nothing.
+
+**What:** Export → Current List now has options:
+- **Show:** To buy (default) / Done / All.
+- **Qty** (on): `- Milk - 0.5 gal`, or `x3` when an item has no unit.
+- **Prices** (off): cost per line plus a `Total:` line.
+
+Example ("To buy", Qty on):
+```
+Weekly Groceries (to buy)
+
+- Whole Milk (1 Gallon) - 0.5 gal
+- Sourdough Bread - 1 loaf
+```
+"All" keeps `[ ]` / `[x]` so you can tell what's done. The options row hides
+when "All Lists (Full Backup)" is selected.
+
+- **Copy Text** falls back to selecting the text box and `execCommand('copy')`
+  when the clipboard API is missing (it briefly turns off `readonly`, because
+  iOS won't select inside a read-only box). The button shows "Copied ✓"
+  instead of an `alert()`.
+- **Share** button opens the phone's share sheet (straight to WhatsApp etc.)
+  via `navigator.share`. Browsers only allow this on HTTPS, so on plain http it
+  stays hidden. If you ever put it behind `tailscale serve` (HTTPS), it shows up
+  on its own.
+
+All the logic is in `formatListText()` and `copyText()` in `app.js`.
+
+## 12. Share icons and remembered options (`86bee94`)
+
+**Why:** Copy → switch app → paste is three steps. The system Share button
+from #11 only appears on HTTPS, so on the home http setup there was no
+one-tap way to send the list.
+
+**What:**
+- A row of icons under the preview:
+  - **WhatsApp** opens `https://wa.me/?text=…` (the WhatsApp app on a phone,
+    WhatsApp Web on a computer) with the text filled in; you pick the chat.
+  - **Messages** opens `sms:?&body=…` (iMessage/SMS; the `?&` form works on both
+    iPhone and Android).
+  - **Email** opens `mailto:?subject=<list title>&body=…`.
+  - **Share** (system share sheet, from #11) moved into this row as an icon.
+    Still HTTPS-only.
+
+  These are ordinary links, so they work over plain http. Their addresses are
+  rebuilt whenever the text changes. **Discord has no share link**, so for
+  Discord it's still Copy Text + paste.
+- Icons are inline SVG (WhatsApp glyph from Simple Icons, CC0; the others
+  Feather-style, MIT): no extra files or requests. They reuse `.btn-icon`; one
+  new CSS rule, `.btn-icon[hidden] { display: none }`, because `.btn-icon`'s
+  `display: flex` would otherwise override `hidden`.
+- **Options are remembered on each phone** (To buy/Done/All, Qty, Prices), in
+  `localStorage` under `shoplist_export_options`. First-time default is
+  **To buy + Qty**. If storage is unavailable (private browsing) it simply uses
+  that default.
 
 ---
 

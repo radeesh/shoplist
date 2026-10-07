@@ -405,21 +405,56 @@ function initEventListeners() {
 
   const updateExportContent = async () => {
     const scope = document.querySelector('input[name="exportScope"]:checked')?.value || 'current';
+    document.getElementById('exportTextOptions').style.display = scope === 'all' ? 'none' : 'flex';
+    document.getElementById('exportShareIcons').style.display = scope === 'all' ? 'none' : 'flex';
     if (scope === 'all') {
       const res = await API.exportAll();
       if (res.success) {
         document.getElementById('exportPreview').value = JSON.stringify(res.data, null, 2);
       }
     } else {
-      let text = `SHOPLIST\n---------------------\n`;
-      state.items.forEach(i => {
-        text += `${i.is_checked ? '[x]' : '[ ]'} ${i.name}${i.quantity > 1 ? ` (${i.quantity})` : ''}\n`;
+      const text = formatListText({
+        show: document.querySelector('input[name="exportShow"]:checked')?.value || 'todo',
+        qty: document.getElementById('exportQty').checked,
+        prices: document.getElementById('exportPrices').checked
       });
       document.getElementById('exportPreview').value = text;
+
+      // Plain links, so these work over http too (unlike navigator.share).
+      // Discord has no share link; use Copy Text there.
+      const t = encodeURIComponent(text);
+      document.getElementById('shareWhatsApp').href = `https://wa.me/?text=${t}`;
+      document.getElementById('shareSms').href = `sms:?&body=${t}`; // "?&" works on both iOS and Android
+      document.getElementById('shareEmail').href = `mailto:?subject=${encodeURIComponent(text.split('\n')[0])}&body=${t}`;
     }
   };
 
-  document.querySelectorAll('input[name="exportScope"]').forEach(r => {
+  // Remember the share options per device. Defaults (in index.html): To buy + Qty.
+  try {
+    const saved = JSON.parse(localStorage.getItem('shoplist_export_options'));
+    if (saved) {
+      const radio = document.querySelector(`input[name="exportShow"][value="${saved.show}"]`);
+      if (radio) radio.checked = true;
+      document.getElementById('exportQty').checked = !!saved.qty;
+      document.getElementById('exportPrices').checked = !!saved.prices;
+    }
+  } catch (e) { /* no storage (e.g. private mode): keep defaults */ }
+
+  const saveExportOptions = () => {
+    try {
+      localStorage.setItem('shoplist_export_options', JSON.stringify({
+        show: document.querySelector('input[name="exportShow"]:checked')?.value,
+        qty: document.getElementById('exportQty').checked,
+        prices: document.getElementById('exportPrices').checked
+      }));
+    } catch (e) { /* ignore */ }
+  };
+
+  document.querySelectorAll('input[name="exportShow"], #exportQty, #exportPrices').forEach(r => {
+    r.addEventListener('change', saveExportOptions);
+  });
+
+  document.querySelectorAll('input[name="exportScope"], input[name="exportShow"], #exportQty, #exportPrices').forEach(r => {
     r.addEventListener('change', updateExportContent);
   });
 
@@ -455,11 +490,22 @@ function initEventListeners() {
     exportTabContent.style.display = 'none';
   });
 
-  document.getElementById('btnCopyFormatted')?.addEventListener('click', () => {
-    const text = document.getElementById('exportPreview').value;
-    navigator.clipboard.writeText(text);
-    alert('List copied');
+  document.getElementById('btnCopyFormatted')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const ok = await copyText(document.getElementById('exportPreview'));
+    btn.textContent = ok ? 'Copied ✓' : 'Copy failed';
+    setTimeout(() => { btn.textContent = 'Copy Text'; }, 1500);
   });
+
+  // Native share sheet (WhatsApp, Messages…). Browsers only offer it on
+  // HTTPS, so on plain http://<LAN-IP> the button stays hidden.
+  const shareBtn = document.getElementById('btnShareText');
+  if (shareBtn && navigator.share) {
+    shareBtn.hidden = false;
+    shareBtn.addEventListener('click', () => {
+      navigator.share({ text: document.getElementById('exportPreview').value }).catch(() => {});
+    });
+  }
 
   document.getElementById('btnDownloadJSON')?.addEventListener('click', async () => {
     const scope = document.querySelector('input[name="exportScope"]:checked')?.value || 'current';
@@ -569,6 +615,53 @@ function showUndo(message, onUndo) {
 function hideUndo() {
   clearTimeout(undoTimer);
   document.getElementById('undoToast').hidden = true;
+}
+
+// Plain text of the current list for pasting into WhatsApp / Discord.
+// show: 'todo' (unchecked) | 'done' (checked) | 'all'
+function formatListText({ show, qty, prices }) {
+  const list = state.lists.find(l => l.id === state.activeListId);
+  const items = state.items.filter(i =>
+    show === 'all' || (show === 'done') === (i.is_checked === 1));
+
+  const label = { todo: ' (to buy)', done: ' (done)', all: '' }[show];
+  const lines = [`${list?.name || 'Shopping list'}${label}`, ''];
+  let total = 0;
+
+  for (const i of items) {
+    // Checkboxes only mean something when both states are listed.
+    let line = (show === 'all' ? (i.is_checked ? '[x] ' : '[ ] ') : '- ') + i.name;
+    if (qty) {
+      if (i.unit) line += ` - ${i.quantity} ${i.unit}`;
+      else if (i.quantity !== 1) line += ` x${i.quantity}`;
+    }
+    const cost = (i.estimated_price || 0) * i.quantity;
+    if (prices && cost > 0) line += ` ($${cost.toFixed(2)})`;
+    total += cost;
+    lines.push(line);
+  }
+
+  if (!items.length) lines.push('(nothing)');
+  if (prices && total > 0) lines.push('', `Total: $${total.toFixed(2)}`);
+  return lines.join('\n');
+}
+
+// navigator.clipboard only exists on HTTPS/localhost, so on the phones
+// (http://<LAN-IP> or a Tailscale IP) fall back to selecting the textarea.
+async function copyText(textarea) {
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(textarea.value);
+      return true;
+    } catch (e) { /* fall through */ }
+  }
+  textarea.readOnly = false; // iOS won't select inside a readonly field
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const ok = document.execCommand('copy');
+  textarea.readOnly = true;
+  textarea.blur();
+  return ok;
 }
 
 function openModal(id) {

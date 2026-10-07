@@ -3,6 +3,8 @@
 const API = {
   getLists: () => fetch('/api/lists').then(r => r.json()),
   createList: (data) => fetch('/api/lists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then(r => r.json()),
+  updateList: (id, data) => fetch(`/api/lists/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then(r => r.json()),
+  deleteList: (id) => fetch(`/api/lists/${id}`, { method: 'DELETE' }).then(r => r.json()),
 
   getItems: (listId, query = {}) => {
     const params = new URLSearchParams(query);
@@ -29,7 +31,32 @@ const state = {
 
 document.documentElement.setAttribute('data-theme', state.theme);
 
+// US units for the Unit dropdowns (add form + edit modal). '' = no unit.
+const UNITS = {
+  'Count': ['pcs', 'pack', 'box', 'bag', 'bottle', 'can', 'jar', 'carton', 'dozen', 'bunch', 'loaf'],
+  'Weight': ['oz', 'lb'],
+  'Liquid': ['fl oz', 'cup', 'pt', 'qt', 'gal']
+};
+
+function fillUnitSelect(select) {
+  if (!select) return;
+  select.innerHTML = '<option value="">—</option>' + Object.entries(UNITS).map(([group, units]) =>
+    `<optgroup label="${group}">${units.map(u => `<option value="${u}">${u}</option>`).join('')}</optgroup>`
+  ).join('');
+}
+
+// Select a unit, adding it as an option first if it isn't in UNITS
+// (items saved before the dropdown existed may have e.g. "tubs").
+function setUnitSelect(select, unit) {
+  if (unit && ![...select.options].some(o => o.value === unit)) {
+    select.add(new Option(unit, unit));
+  }
+  select.value = unit || '';
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  fillUnitSelect(document.getElementById('itemUnitInput'));
+  fillUnitSelect(document.getElementById('editItemUnit'));
   initEventListeners();
   setupSSE();
   await loadLists();
@@ -42,15 +69,33 @@ function setupSSE() {
   evtSource.addEventListener('ITEM_DELETED', (e) => handleSSEUpdate(e));
   evtSource.addEventListener('LIST_CLEARED', (e) => handleSSEUpdate(e));
   evtSource.addEventListener('LIST_RESET', (e) => handleSSEUpdate(e));
+  evtSource.addEventListener('ITEMS_REORDERED', (e) => handleSSEUpdate(e));
   evtSource.addEventListener('LIST_CREATED', () => loadLists());
+  evtSource.addEventListener('LIST_UPDATED', () => loadLists());
+  evtSource.addEventListener('LIST_DELETED', () => loadLists());
+
+  // Events sent while the phone slept or the VPN dropped are lost, so
+  // re-fetch whenever the stream (re)connects or the tab comes back.
+  evtSource.addEventListener('open', () => refresh());
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refresh();
+  });
 }
 
 function handleSSEUpdate(e) {
   const data = JSON.parse(e.data);
-  if (data.listId === state.activeListId) {
+  if (data.listId === state.activeListId) refresh();
+}
+
+// Reload items + list counts. Debounced so an action on this device and
+// the SSE echo of that same action cause one reload, not two.
+let refreshTimer = null;
+function refresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
     loadItems(state.activeListId, false);
     loadLists(false);
-  }
+  }, 150);
 }
 
 async function loadLists(switchActive = true) {
@@ -58,6 +103,7 @@ async function loadLists(switchActive = true) {
   if (res.success) {
     state.lists = res.data;
     renderListSelector();
+    renderListManager();
 
     if (switchActive && state.lists.length > 0) {
       const savedListId = parseInt(localStorage.getItem('shoplist_active_list'));
@@ -70,7 +116,7 @@ async function loadLists(switchActive = true) {
 async function loadItems(listId, showLoading = true) {
   if (!listId) return;
 
-  const res = await API.getItems(listId, { search: state.searchQuery });
+  const res = await API.getItems(listId);
   if (res.success) {
     state.items = res.data;
     renderItems();
@@ -88,6 +134,44 @@ function setActiveList(listId) {
   loadItems(listId);
 }
 
+// Settings modal: one row per list with rename / delete
+function renderListManager() {
+  const container = document.getElementById('listManagerContainer');
+  if (!container) return;
+
+  container.innerHTML = `<div class="items-list">${state.lists.map(l => `
+    <div class="item-card">
+      <div class="item-title">${escapeHtml(l.name)}</div>
+      <div class="item-actions">
+        <button class="btn-edit" onclick="renameList(${l.id})" title="Rename">✎</button>
+        <button class="btn-delete" onclick="deleteList(${l.id})" title="Delete">✕</button>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+async function renameList(listId) {
+  const list = state.lists.find(l => l.id === listId);
+  const name = prompt('Rename list', list?.name || '')?.trim();
+  if (!name) return;
+
+  await API.updateList(listId, { name });
+  loadLists(false);
+}
+
+async function deleteList(listId) {
+  if (state.lists.length <= 1) {
+    alert('You need at least one list.');
+    return;
+  }
+  const list = state.lists.find(l => l.id === listId);
+  if (!confirm(`Delete "${list?.name}"?`)) return;
+
+  // Server archives the list (rows stay in the DB) rather than deleting it.
+  await API.deleteList(listId);
+  loadLists(); // switches to another list if the active one was deleted
+}
+
 function renderListSelector() {
   const select = document.getElementById('activeListSelect');
   if (!select) return;
@@ -101,19 +185,26 @@ function renderListSelector() {
 
 function renderItems() {
   const container = document.getElementById('itemsContainer');
-  const emptyState = document.getElementById('emptyState');
   if (!container) return;
 
-  if (state.items.length === 0) {
-    container.innerHTML = '';
-    if (emptyState) {
-      container.appendChild(emptyState);
-      emptyState.style.display = 'block';
-    }
+  // Search filters locally; state.items always holds the whole list.
+  const query = state.searchQuery.toLowerCase();
+  const visible = query
+    ? state.items.filter(i => i.name.toLowerCase().includes(query))
+    : state.items;
+
+  if (visible.length === 0) {
+    // Rendered here, not toggled on a static node: the innerHTML below
+    // would destroy that node (the old #emptyState never reappeared).
+    container.innerHTML = `<div class="empty-state">${query ? 'No matches' : 'List is empty'}</div>`;
     return;
   }
 
-  container.innerHTML = state.items.map(item => {
+  // Reordering a filtered view would drop the hidden items' positions,
+  // so drag-and-drop is only offered when not searching.
+  const canDrag = !query;
+
+  container.innerHTML = visible.map(item => {
     const isChecked = item.is_checked === 1;
     const priceText = item.estimated_price > 0 ? `$${(item.estimated_price * item.quantity).toFixed(2)}` : '';
     const metaParts = [];
@@ -121,8 +212,8 @@ function renderItems() {
     if (priceText) metaParts.push(`Est: ${priceText}`);
 
     return `
-      <div class="item-card ${isChecked ? 'checked' : ''}" data-id="${item.id}" draggable="true">
-        <div class="drag-handle" title="Drag to reorder">⠿</div>
+      <div class="item-card ${isChecked ? 'checked' : ''}" data-id="${item.id}" draggable="${canDrag}">
+        ${canDrag ? '<div class="drag-handle" title="Drag to reorder">⠿</div>' : ''}
         <div class="item-left">
           <div class="custom-checkbox ${isChecked ? 'checked' : ''}" onclick="toggleCheck(${item.id}, ${!isChecked})">
             ${isChecked ? '✓' : ''}
@@ -164,7 +255,7 @@ async function toggleCheck(itemId, isChecked) {
   updateProgress();
 
   await API.updateItem(itemId, { is_checked: isChecked });
-  loadLists(false);
+  refresh();
 }
 
 async function deleteItem(itemId) {
@@ -173,7 +264,7 @@ async function deleteItem(itemId) {
   updateProgress();
 
   await API.deleteItem(itemId);
-  loadLists(false);
+  refresh();
 }
 
 function openEditModal(itemId) {
@@ -183,7 +274,7 @@ function openEditModal(itemId) {
   document.getElementById('editItemId').value = item.id;
   document.getElementById('editItemName').value = item.name;
   document.getElementById('editItemQty').value = item.quantity || 1;
-  document.getElementById('editItemUnit').value = item.unit || '';
+  setUnitSelect(document.getElementById('editItemUnit'), item.unit);
   document.getElementById('editItemPrice').value = item.estimated_price || '';
 
   openModal('editItemModal');
@@ -218,7 +309,7 @@ function initEventListeners() {
     const name = input.value.trim();
     if (!name || !state.activeListId) return;
 
-    const qty = parseInt(document.getElementById('itemQtyInput')?.value) || 1;
+    const qty = parseFloat(document.getElementById('itemQtyInput')?.value) || 1;
     const unit = document.getElementById('itemUnitInput')?.value?.trim() || '';
     const price = parseFloat(document.getElementById('itemPriceInput')?.value) || 0;
 
@@ -226,29 +317,37 @@ function initEventListeners() {
     if (document.getElementById('itemPriceInput')) document.getElementById('itemPriceInput').value = '';
 
     await API.addItem(state.activeListId, { name, quantity: qty, unit, estimated_price: price });
-    loadItems(state.activeListId, false);
-    loadLists(false);
+    refresh();
   });
 
   // Search
   document.getElementById('searchInput')?.addEventListener('input', (e) => {
     state.searchQuery = e.target.value.trim();
-    loadItems(state.activeListId, false);
+    renderItems();
   });
 
   // Actions
   document.getElementById('btnClearCompleted')?.addEventListener('click', async () => {
-    if (!state.activeListId) return;
-    await API.clearCompleted(state.activeListId);
-    loadItems(state.activeListId, false);
-    loadLists(false);
+    const listId = state.activeListId;
+    if (!listId) return;
+    const cleared = state.items.filter(i => i.is_checked === 1);
+    if (!cleared.length) return;
+
+    await API.clearCompleted(listId);
+    refresh();
+
+    // The server deletes the rows, so undo re-adds this copy through the
+    // import endpoint (same name/qty/unit/price/notes; new ids).
+    showUndo(`Cleared ${cleared.length} item(s)`, async () => {
+      await API.importItems(listId, cleared);
+      refresh();
+    });
   });
 
   document.getElementById('btnResetChecked')?.addEventListener('click', async () => {
     if (!state.activeListId) return;
     await API.resetList(state.activeListId);
-    loadItems(state.activeListId, false);
-    loadLists(false);
+    refresh();
   });
 
   // Edit Item Modal
@@ -262,7 +361,7 @@ function initEventListeners() {
     e.preventDefault();
     const id = parseInt(document.getElementById('editItemId').value);
     const name = document.getElementById('editItemName').value.trim();
-    const quantity = parseInt(document.getElementById('editItemQty').value) || 1;
+    const quantity = parseFloat(document.getElementById('editItemQty').value) || 1;
     const unit = document.getElementById('editItemUnit').value.trim();
     const estimated_price = parseFloat(document.getElementById('editItemPrice').value) || 0;
 
@@ -270,13 +369,16 @@ function initEventListeners() {
 
     closeModal('editItemModal');
     await API.updateItem(id, { name, quantity, unit, estimated_price });
-    loadItems(state.activeListId, false);
-    loadLists(false);
+    refresh();
   });
 
   // Modals
   document.getElementById('btnNewList')?.addEventListener('click', () => openModal('listModal'));
   document.getElementById('btnOpenMenu')?.addEventListener('click', () => openModal('menuModal'));
+  document.getElementById('btnCreateListFromMenu')?.addEventListener('click', () => {
+    closeModal('menuModal');
+    openModal('listModal');
+  });
 
   document.getElementById('listForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -409,8 +511,7 @@ function initEventListeners() {
           alert(`Successfully imported ${res.count || res.itemsImported} items!`);
           document.getElementById('importInput').value = '';
           closeModal('exportModal');
-          loadItems(state.activeListId, false);
-          loadLists(false);
+          refresh();
           return;
         }
       }
@@ -441,8 +542,7 @@ function initEventListeners() {
           alert(`Successfully imported ${res.count || res.itemsImported} items!`);
           document.getElementById('importInput').value = '';
           closeModal('exportModal');
-          loadItems(state.activeListId, false);
-          loadLists(false);
+          refresh();
           return;
         }
       }
@@ -450,6 +550,24 @@ function initEventListeners() {
 
     alert('Import failed. Please check the backup data format.');
   });
+}
+
+// Bottom bar with an Undo button that disappears after 6 seconds.
+let undoTimer = null;
+function showUndo(message, onUndo) {
+  document.getElementById('undoText').textContent = message;
+  document.getElementById('btnUndo').onclick = () => {
+    hideUndo();
+    onUndo();
+  };
+  document.getElementById('undoToast').hidden = false;
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(hideUndo, 6000);
+}
+
+function hideUndo() {
+  clearTimeout(undoTimer);
+  document.getElementById('undoToast').hidden = true;
 }
 
 function openModal(id) {

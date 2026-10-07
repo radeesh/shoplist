@@ -754,3 +754,28 @@ html {
     padding: 8px 4px;
   }
 }
+
+/* Undo bar (after Clear Done) */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 10px 10px 16px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  z-index: 1000;
+}
+
+/* display:flex above would otherwise override the hidden attribute */
+.undo-toast[hidden] {
+  display: none;
+}

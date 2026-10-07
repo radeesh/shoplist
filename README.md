@@ -51,6 +51,7 @@ services:
     image: shoplist:latest
     container_name: shoplist
     restart: unless-stopped
+    init: true
     ports:
       - "7821:7821"
     environment:

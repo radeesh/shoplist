@@ -57,11 +57,11 @@
       <div id="advancedOptions" class="advanced-options" style="display: none;">
         <div class="opt-group">
           <label for="itemQtyInput">QTY</label>
-          <input type="number" id="itemQtyInput" class="input-text-sm" value="1" min="1" step="1">
+          <input type="number" id="itemQtyInput" class="input-text-sm" value="1" min="0" step="any">
         </div>
         <div class="opt-group">
           <label for="itemUnitInput">UNIT</label>
-          <input type="text" id="itemUnitInput" class="input-text-sm" placeholder="pcs, kg">
+          <select id="itemUnitInput" class="input-text-sm"></select>
         </div>
         <div class="opt-group">
           <label for="itemPriceInput">PRICE ($)</label>
@@ -86,9 +86,6 @@
     <!-- Item List -->
     <section class="items-list" id="itemsContainer">
       <!-- Dynamic Item Cards -->
-      <div class="empty-state" id="emptyState" style="display: none;">
-        List is empty
-      </div>
     </section>
   </div>
 
@@ -164,11 +161,11 @@
         <div class="edit-options-row">
           <div class="opt-group">
             <label for="editItemQty">QTY</label>
-            <input type="number" id="editItemQty" class="input-text-sm" value="1" min="1" step="1">
+            <input type="number" id="editItemQty" class="input-text-sm" value="1" min="0" step="any">
           </div>
           <div class="opt-group">
             <label for="editItemUnit">UNIT</label>
-            <input type="text" id="editItemUnit" class="input-text-sm" placeholder="pcs, kg">
+            <select id="editItemUnit" class="input-text-sm"></select>
           </div>
           <div class="opt-group">
             <label for="editItemPrice">PRICE ($)</label>
@@ -195,6 +192,12 @@
       </div>
       <button id="btnCreateListFromMenu" class="btn-outline" style="width: 100%; margin-top: 12px;">+ New List</button>
     </div>
+  </div>
+
+  <!-- Undo bar (shown after Clear Done) -->
+  <div class="undo-toast" id="undoToast" hidden>
+    <span id="undoText"></span>
+    <button type="button" class="btn-primary" id="btnUndo">Undo</button>
   </div>
 
   <script src="/app.js"></script>

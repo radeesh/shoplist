@@ -7,8 +7,8 @@ RUN apk add --no-cache python3 make g++ sqlite-dev
 WORKDIR /app
 
 # Install package dependencies
-COPY package.json ./
-RUN npm install --production
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Production runtime container
 FROM node:20-alpine AS runner

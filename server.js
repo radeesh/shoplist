@@ -1,12 +1,10 @@
 const express = require('express');
-const cors = require('cors');
 const path = require('path');
 const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 7821;
 
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -15,6 +13,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Server-Sent Events (SSE) active clients registry
 let sseClients = [];
+let nextClientId = 1;
 
 function broadcast(eventType, data = {}) {
   const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -26,11 +25,10 @@ app.get('/api/events', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
+    'Connection': 'keep-alive'
   });
 
-  const clientId = Date.now();
+  const clientId = nextClientId++; // Date.now() collided when two devices connected in the same ms
   const newClient = { id: clientId, res };
   sseClients.push(newClient);
 
@@ -284,6 +282,7 @@ app.post('/api/lists/:listId/reorder', (req, res) => {
       ids.forEach((id, index) => update.run(index, id, listId));
     });
     reorderAll(orderedIds);
+    broadcast('ITEMS_REORDERED', { listId: parseInt(listId) });
 
     res.json({ success: true });
   } catch (err) {
@@ -372,7 +371,7 @@ app.delete('/api/items/:id', (req, res) => {
 // Full export of ALL lists and ALL items
 app.get('/api/export', (req, res) => {
   try {
-    const lists = db.prepare(`SELECT * FROM lists ORDER BY created_at ASC`).all();
+    const lists = db.prepare(`SELECT * FROM lists WHERE is_archived = 0 ORDER BY created_at ASC`).all();
     const backupData = {
       version: '1.0',
       exported_at: new Date().toISOString(),
@@ -387,7 +386,6 @@ app.get('/api/export', (req, res) => {
             unit: i.unit,
             estimated_price: i.estimated_price,
             is_checked: i.is_checked === 1,
-            category: i.category,
             notes: i.notes,
             priority: i.priority
           }))
